@@ -1,14 +1,11 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from mpmath import ellipk, ellippi
 import mpmath
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from scipy.integrate import dblquad
+import time
 from tqdm import tqdm
-import pandas as pd
-from tabulate import tabulate
 
 mpmath.mp.dps = 15  # Decimal precision
-
 
 # Constants
 a_max_cm = 4.0
@@ -21,10 +18,6 @@ density = 7400
 g = 9.8
 
 current_increment = 0.2
-# max_curr removed to allow unlimited increment until reaching F_MAX
-r_samplesN = 30
-z_samplesN = 10
-
 
 def elliptic_vals(k2, h, cache):
     key = (float(k2), float(h))
@@ -35,7 +28,6 @@ def elliptic_vals(k2, h, cache):
     cache[key] = (K_val, Pi_val)
     return K_val, Pi_val
 
-
 def x_elliptic(temp, r, a, cache):
     k = np.sqrt(4 * a * r / ((r + a) ** 2 + temp ** 2))
     h = 4 * a * r / (r + a) ** 2
@@ -44,17 +36,18 @@ def x_elliptic(temp, r, a, cache):
     bracket = ((r - a) / (r + a)) * Pi - K
     return numerator * bracket
 
-
-def Bz_function(r_arr, z, a, N, I, coil_len, cache):
+def Bz_function_single(r, z, a, N, I, coil_len, cache):
     z1 = z + coil_len / 2
     z2 = z - coil_len / 2
     prefactor = mu0 * N * I / (2 * np.pi * coil_len)
-    return np.array([prefactor * (x_elliptic(z2, r, a, cache) - x_elliptic(z1, r, a, cache)) for r in r_arr])
+    return prefactor * (x_elliptic(z2, r, a, cache) - x_elliptic(z1, r, a, cache))
 
+def dBz_dz_function(r, z, a, N, I, coil_len, cache, dz=1e-7):
+    """Calculate dBz/dz using numerical differentiation"""
+    return (Bz_function_single(r, z + dz, a, N, I, coil_len, cache) - 
+            Bz_function_single(r, z - dz, a, N, I, coil_len, cache)) / (2 * dz)
 
-def compute_for_length_a_core(args):
-    a_core_cm, l_cm, r_id_cm, r_od_cm = args
-
+def compute_for_single_case(a_core_cm, l_cm, r_id_cm, r_od_cm):
     cache = {}
     a_core = a_core_cm / 100.0
     a_max = a_max_cm / 100.0
@@ -72,88 +65,82 @@ def compute_for_length_a_core(args):
     m = density * V
     F_MAX = (m * (20 * g + g)) / 2
 
-    r_samples = np.linspace(r_id, r_od, r_samplesN)
-    Nz = z_samplesN
-    z_samples = np.linspace(z_actual - t_p / 2, z_actual + t_p / 2, Nz)
+    z_min = z_actual - t_p / 2
+    z_max = z_actual + t_p / 2
     M_r = B_r / mu0
 
     current = current_increment
     F_at_I = None
+    
+    # Initialize progress bar
+    pbar = tqdm(desc="Finding I_max", unit="iter", ncols=100)
+    iteration = 0
+    
     while True:  # No max current cap, run until reaching F_MAX
         F_total = 0.0
+        
         for layer in range(N_l):
             a_layer = a_core + t_w * layer + t_w / 2
-            integrand_matrix = np.zeros((Nz, len(r_samples)))
-            for i, z_val in enumerate(z_samples):
-                dBz_dz_vals = (Bz_function(r_samples, z_val + 1e-7, a_layer, N_o, current, l, cache) -
-                               Bz_function(r_samples, z_val - 1e-7, a_layer, N_o, current, l, cache)) / (2 * 1e-7)
-                integrand_matrix[i, :] = dBz_dz_vals * r_samples
-            radial_integration = np.trapz(integrand_matrix, r_samples, axis=1)
-            double_integral = np.trapz(radial_integration, z_samples)
+            
+            # Define integrand function for double integration
+            def integrand(z, r):
+                return dBz_dz_function(r, z, a_layer, N_o, current, l, cache) * r
+            
+            # Perform absolute double integration
+            double_integral, error = dblquad(
+                integrand, 
+                r_id, r_od,  # r limits
+                lambda r: z_min, lambda r: z_max,  # z limits (constant for each r)
+                epsabs=1e-10, epsrel=1e-10
+            )
+            
             F_layer = M_r * 2 * np.pi * double_integral
             F_total += F_layer
+        
+        # Update progress bar
+        iteration += 1
+        pbar.update(1)
+        pbar.set_postfix({
+            "Current I": f"{current:.2f}A", 
+            "F_total": f"{abs(F_total):.2f}N",
+            "F_target": f"{F_MAX:.2f}N"
+        })
+        
         if abs(F_total) >= F_MAX:
             F_at_I = F_total
             break
         current += current_increment
-
+    
+    pbar.close()
     return (a_core_cm, l_cm, N_o, N_l, current, F_MAX)
 
-
 if __name__ == "__main__":
+    # Start timing
+    start_time = time.time()
+    
     # User input for r_id and r_od
     r_id_cm = float(input("Enter inner radius r_id (cm): "))
     r_od_cm = float(input("Enter outer radius r_od (cm): "))
 
-    a_core_values = np.arange(0.5, 2.6, 0.5)
-    l_cm_values = range(4, 11)
-    inputs = [(a, l, r_id_cm, r_od_cm) for a in a_core_values for l in l_cm_values]
-
-    results = []
-    with ProcessPoolExecutor() as executor:
-        futures = [executor.submit(compute_for_length_a_core, args) for args in inputs]
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Computing"):
-            results.append(future.result())
-
-    # Use F_MAX from the first result (all are same for given inputs)
-    _, _, _, _, _, F_MAX = results[0]
-
-    # Organize results to plot
-    import collections
-    results_by_core = collections.defaultdict(list)
-    for a_core_cm, l_cm, N_o, N_l, I_max, F_val in results:
-        results_by_core[a_core_cm].append((N_o, I_max, l_cm, N_l))
-
-    plt.figure(figsize=(12, 8))
-
-    rows = []
-    for a_core_cm, data_list in results_by_core.items():
-        data_list.sort(key=lambda x: x[0])  # sort by N_0
-        for (N0, I, l, Nl) in data_list:
-            rows.append([a_core_cm, l, N0, Nl, I])
-        N0_vals = [d[0] for d in data_list]
-        I_vals = [d[1] if d[1] is not None else 0 for d in data_list]
-        Nl_vals = [d[3] for d in data_list]
-
-        label = f'$a_{{core}}={a_core_cm}cm, N_l={Nl_vals[0]}$'
-        plt.plot(N0_vals, I_vals, marker='o', label=label)
-
-        # Annotate max current
-        for (N0, I, l, Nl) in data_list:
-            if I is not None:
-                plt.annotate(f"{I:.2f}", (N0, I),
-                             textcoords="offset points", xytext=(0, 8), ha='center', fontsize=7)
-
-    plt.xlabel('Number of Turns per Layer $N_0$')
-    plt.ylabel('Minimum Current $I_{max}$ (A) to Reach $F_{MAX}$')
-    plt.title(f'$N_0$ vs $I_{{max}}$ for $r_{{id}}={r_id_cm}$cm, $r_{{od}}={r_od_cm}$cm, $F_{{MAX}}={F_MAX:.2f}$N')
-    plt.legend(title='Core Radius and Layers')
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-    # Print data table immediately after plotting
-    df = pd.DataFrame(rows, columns=['a_core_cm', 'l_cm', 'N_o', 'N_l', 'I_max'])
-
-    # Print table using tabulate for fast clear output
-    print(tabulate(df, headers='keys', tablefmt='psql', showindex=False))
+    # Fixed values as requested
+    a_core_cm = 1.0
+    l_cm = 6
+    
+    print(f"Computing for a_core = {a_core_cm} cm, l = {l_cm} cm")
+    print("Starting computation...")
+    
+    result = compute_for_single_case(a_core_cm, l_cm, r_id_cm, r_od_cm)
+    a_core, l, N_o, N_l, I_max, F_MAX = result
+    
+    # End timing
+    end_time = time.time()
+    total_time = end_time - start_time
+    
+    print(f"\nResults:")
+    print(f"Core radius: {a_core} cm")
+    print(f"Coil length: {l} cm") 
+    print(f"Turns per layer (N_o): {N_o}")
+    print(f"Number of layers (N_l): {N_l}")
+    print(f"Required current (I_max): {I_max:.3f} A")
+    print(f"Target force (F_MAX): {F_MAX:.2f} N")
+    print(f"\nTotal execution time: {total_time:.2f} seconds")
