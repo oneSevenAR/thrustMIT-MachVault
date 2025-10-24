@@ -1,24 +1,22 @@
-# how to run this janky openmv fb crap
+# How to Run the OpenMV Framebuffer Script
 
-## step 1  
-open up `pyopenmv_fb.py` from the openmv repo  
-change this line  
-```python  
-sensor.set_pixformat(sensor.GRAYSCALE)  
+## Step 1  
+Open the `pyopenmv_fb.py` file from the OpenMV repository.  
+Locate the following line:  
+```python
+sensor.set_pixformat(sensor.GRAYSCALE)
 ```  
-or whatever fits ur damn camera  
-(for RT1062 it's GRAYSCALE dont cry abt it)  
+Adjust it based on your camera configuration.  
+(For the RT1062 board, **use GRAYSCALE**.)
 
-## step 2  
-grab `pyopenmv.py` too  
-dump both files in the same damn folder  
-make sure u aint dumb and ur virtual env got all the libs like `pygame` or else itll shit itself  
+## Step 2  
+Download `pyopenmv.py` as well.  
+Place **both files in the same directory.**  
+Ensure your Python environment has all required libraries installed (e.g., `pygame`), or the script may fail to execute.
 
-## step 3  
-run it like this  
-```bash  
-python pyopenmv_fb.py --port /dev/ttyACM0  
+## Step 3  
+Run the script using:  
+```bash
+python pyopenmv_fb.py --port /dev/ttyACM0
 ```  
-
-done now go do smth useful for once
 
