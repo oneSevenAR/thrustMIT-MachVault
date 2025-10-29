@@ -62,8 +62,8 @@ const int BACKLASH_STEPS = 1250;
 // Winding Logic Variables
 const long STEPS_PER_MM = 200;
 const int ROTOR_STEPS_PER_TURN = 200;
-int ROTOR_STEP_DELAY_US = 1000; // Your new, stable rotor speed.
-const int ROTOR_TARGET_DELAY = 800;
+int ROTOR_STEP_DELAY_US = 1200; // Your new, stable rotor speed.
+const int ROTOR_TARGET_DELAY = 1200;
 const int ROTOR_MICROSTEP_FACTOR = 8; // Eighth-step
 const int FOLLOWER_STEP_DELAY = 500;
 const int FOLLOWER_MICROSTEP_FACTOR = 2;
